@@ -1,0 +1,105 @@
+---
+title: "Activity Prediction"
+output: html_document
+---
+
+Data originally from [here](http://groupware.les.inf.puc-rio.br/har).
+
+```{r cache=TRUE, message=FALSE}
+if(!file.exists("data/pml-training.csv")){
+    download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", "data/pml-training.csv")}
+if(!file.exists("data/pml-testing.csv")){
+    download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", "data/pml-testing.csv")}
+
+options(stringsAsFactors=FALSE)
+library(ggplot2)
+library(dplyr)
+library(reshape2)
+library(caret)
+library(grid)
+
+alldata <- read.csv("data/pml-training.csv", row.names="X",
+                 na.strings=c("NA", ""))
+eval_set <- read.csv("data/pml-testing.csv", row.names="X")
+
+set.seed(84)
+inTrain <- createDataPartition(y=alldata$classe, p=.75)[[1]]
+train=alldata[inTrain,]
+test=alldata[-inTrain,]
+```
+
+First look at data:
+```{r}
+str(train, max.level=0)
+names(train)
+
+# name & time variables - no probative value
+train <- train[,-(1:6)]
+
+table(sapply(train, class))
+```
+
+variable elimination
+```{r}
+train <- train %>% mutate(classe=factor(classe))
+
+# mostly NA predictors
+table(colMeans(is.na(train)))
+highNA <- lapply(train, function(x) mean(is.na(x))) > 0.9
+train <- train[,!highNA]
+dim(train)
+sum(is.na(train))
+
+# check for near zero variance predictors
+nz <- nearZeroVar(train, saveMetrics=TRUE)
+with(nz, plot(freqRatio, percentUnique))
+print(nz[nz$freqRatio>2,])
+
+# correlated predictors
+
+stacked <- melt(train, id.vars='classe')
+ggplot(stacked, aes(value, color=classe)) +
+    geom_density() + 
+    facet_wrap(~variable, ncol=5, scales="free") +  
+    theme(panel.margin=unit(-.2, "lines"), 
+                             axis.text=element_blank(),
+          axis.ticks=element_blank()) +
+    theme(legend.position = "top")
+
+
+pc <- prcomp(train[,-53])
+# spc <- prcomp(train[,-c(1,54)], scale=TRUE, tol=.1)
+
+# pc2 <- princomp(train[,-c(1,54)])
+
+r <- data.frame(pc$rotation[,1:8])
+r$d <- apply(r, 1, function(x){max(abs(x))})
+r$var <- row.names(r)
+comp <- r %>% filter(d>0.2)
+
+#loads <- loadings(pc2)
+#df <- as.data.frame(loadings(pc2)[, 1:4]) %>%
+#    mutate(variable = names(train)[-c(1,54)]) %>% 
+#    filter(Comp.1 > 0.1 | Comp.2 >0.1)
+
+keep <- comp$var
+keep
+
+train <- select(train, one_of(keep), classe)
+
+t0<- Sys.time()
+```
+TRAINING
+```{r cache=TRUE}
+fit <- train(classe~., data=train)
+```
+
+```{r}
+print(Sys.time()-t0)
+
+fit$results
+pred <-predict(fit, newdata=test)
+
+mean(pred==test$classe)  # 98.9% accuracy
+eval_set$pred <- predict(fit, newdata=eval_set)
+```
